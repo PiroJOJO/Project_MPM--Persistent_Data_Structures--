@@ -25,7 +25,7 @@ private:
     // -----------------------------------------
     static constexpr size_t BRANCHING_FACTOR = 32; // Количество потомков в узле
     static constexpr size_t BITS_PER_LEVEL = 5; // Уровень ветвления
-    static constexpr size_t BIT_MASK = BRANCHING_FACTOR - 1; // Длина битовой маски
+    static constexpr size_t BIT_MASK = BRANCHING_FACTOR - 1; // Битовая маска
 
     // -----------------------------------------
     // ------------ Структура узла -------------
@@ -95,7 +95,7 @@ public:
     const T& operator[](size_t index) const;
     const T& get(size_t index) const;
     
-    // Утсановка по индексу нового элемента
+    // Установка по индексу нового элемента
     PersistentVector<T> set(size_t index, const T& value) const;
     // Добавление элемента в конец
     PersistentVector<T> append(const T& value) const;
