@@ -101,18 +101,59 @@ struct Node {
 ```cpp
 template<typename T>
 const T& PersistentVector<T>::getNodeValue(size_t index) const {
-    // Прямой доступ через дерево - O(log32 n)
+    // Проверка на корректность индекса
+    if (index >= data->size) {
+        throw std::out_of_range("Index out of range");
+    }
+
+    // Если вектор пустой (не должно случиться из-за проверки выше)
+    if (empty()) {
+        throw std::runtime_error("Vector is empty");
+    }
+
     auto node = data->root;
     size_t shift = data->shift;
-    
+
+    // Если shift = 0, значит все элементы в корневом узле
+    if (shift == 0) {
+        // Все элементы в корневом узле
+        if (index >= BRANCHING_FACTOR) {
+            throw std::out_of_range("Index out of range for leaf node");
+        }
+
+        if (!node->values[index]) {
+            throw std::runtime_error("Value not found in leaf node");
+        }
+
+        return *node->values[index];
+    }
+
+    // Иначе спускаемся по дереву
     while (shift > 0) {
-        size_t pos = (index >> shift) & BIT_MASK;  // Битовые операции
-        node = node->children[pos];  // Прямой переход
+        size_t pos = (index >> shift) & BIT_MASK;
+
+        // Проверяем, существует ли дочерний узел
+        if (!node->children[pos]) {
+            // Отладочная информация
+            std::cerr << "DEBUG: getNodeValue - child not found at pos=" << pos
+                << ", shift=" << shift << ", index=" << index << std::endl;
+            throw std::runtime_error("Internal error: child node not found");
+        }
+
+        node = node->children[pos];
         shift -= BITS_PER_LEVEL;
     }
-    
+
+    // Достигли листа
     size_t pos = index & BIT_MASK;
-    return *node->values[pos];  // Непосредственный доступ
+
+    if (!node->values[pos]) {
+        std::cerr << "DEBUG: getNodeValue - value not found at leaf pos=" << pos
+            << ", index=" << index << std::endl;
+        throw std::runtime_error("Internal error: value not found in leaf");
+    }
+
+    return *node->values[pos];
 }
 ```
 
@@ -120,51 +161,64 @@ const T& PersistentVector<T>::getNodeValue(size_t index) const {
 **Hash Array Mapped Trie (HAMT) вместо fat-node**
 
 ```cpp
-// Вставка без fat-node
 template<typename K, typename V>
-std::shared_ptr<typename PersistentMap<K, V>::Node> 
-PersistentMap<K, V>::insertNode(std::shared_ptr<Node> node, 
-                               size_t hash, const K& key, 
-                               const V& value, size_t level) const {
-    // Копируем ТОЛЬКО путь в дереве, не все узлы
-    auto new_node = node->clone();  // Глубокое копирование только этого узла
-    
-    if (new_node->isLeaf()) {
-        // Обработка коллизий в листе
+std::shared_ptr<typename PersistentMap<K, V>::Node>
+PersistentMap<K, V>::insertNode(std::shared_ptr<Node> node,
+    size_t hash, const K& key,
+    const V& value, size_t level) const {
+    if (!node) {
+        node = std::make_shared<Node>();
+    }
+
+    auto new_node = node->clone();
+
+    // Если это листовой узел или имеет записи
+    if (!new_node->entries.empty()) {
+        bool found = false;
+
+        // Проверяем, есть ли уже такой ключ
         for (auto& [k, v] : new_node->entries) {
             if (k == key) {
-                v = value;  // Обновление
-                return new_node;
+                v = value;  // Обновляем существующее значение
+                found = true;
+                break;
             }
         }
-        new_node->entries.emplace_back(key, value);
+
+        if (!found) {
+            // Добавляем новую запись
+            new_node->entries.emplace_back(key, value);
+
+            // Проверяем, не нужно ли разделить узел
+            if (new_node->entries.size() > BRANCHING_FACTOR / 2 &&
+                level < (sizeof(size_t) * 8 / BITS_PER_LEVEL)) {
+
+                // Разделяем узел
+                auto split_node = std::make_shared<Node>();
+                for (const auto& [k, v] : new_node->entries) {
+                    size_t entry_hash = hasher(k);
+                    size_t fragment = (entry_hash >> (level * BITS_PER_LEVEL)) & BIT_MASK;
+
+                    if (!(split_node->bitmap & (1 << fragment))) {
+                        split_node->bitmap |= (1 << fragment);
+                        size_t index = getIndex(split_node->bitmap, fragment);
+                        split_node->children.insert(
+                            split_node->children.begin() + index,
+                            std::make_shared<Node>()
+                        );
+                    }
+
+                    size_t index = getIndex(split_node->bitmap, fragment);
+                    split_node->children[index] = insertNode(
+                        split_node->children[index],
+                        entry_hash, k, v, level + 1
+                    );
+                }
+                return split_node;
+            }
+        }
         return new_node;
     }
-    
-    // Разделение через копирование пути
-    size_t hash_fragment = (hash >> (level * BITS_PER_LEVEL)) & BIT_MASK;
-    
-    if (!(new_node->bitmap & (1 << hash_fragment))) {
-        // Новый узел
-        new_node->bitmap |= (1 << hash_fragment);
-        size_t index = getIndex(new_node->bitmap, hash_fragment);
-        auto leaf = std::make_shared<Node>();
-        leaf->entries.emplace_back(key, value);
-        new_node->children.insert(
-            new_node->children.begin() + index,
-            leaf
-        );
-    } else {
-        // Рекурсивное обновление
-        size_t index = getIndex(new_node->bitmap, hash_fragment);
-        new_node->children[index] = insertNode(
-            new_node->children[index],
-            hash, key, value, level + 1
-        );
-    }
-    
-    return new_node;
-}
 ```
 
 ### **3. Чем наш подход лучше fat-node?**
@@ -189,39 +243,83 @@ PersistentVector<T> PersistentVector<T>::set(size_t index, const T& value) const
     if (index >= size()) {
         throw std::out_of_range("Index out of range");
     }
-    
+
     PersistentVector result;
-    // assoc создает ТОЛЬКО новые узлы на пути
-    result.data = assoc(index, value);  // O(log32 n) копирований
+    result.data = assoc(index, value);
     return result;
 }
 
+// -----------------------------------------
+// ----- Исправленный assoc ----------------
+// -----------------------------------------
 template<typename T>
-std::shared_ptr<typename PersistentVector<T>::Data> 
+std::shared_ptr<typename PersistentVector<T>::Data>
 PersistentVector<T>::assoc(size_t index, const T& value) const {
-    // Копируем корень
+    // Если вектор пустой
+    if (empty()) {
+        throw std::runtime_error("Cannot set in empty vector");
+    }
+
+    // Если shift = 0 (все элементы в корне)
+    if (data->shift == 0) {
+        auto new_root = data->root->clone();
+
+        if (index >= BRANCHING_FACTOR) {
+            throw std::out_of_range("Index too large for leaf node");
+        }
+
+        new_root->values[index] = value;
+
+        // Обновляем счетчик
+        if (!data->root->values[index]) {
+            // Добавляем новый элемент
+            new_root->count = data->root->count + 1;
+        }
+        else {
+            // Обновляем существующий
+            new_root->count = data->root->count;
+        }
+
+        return std::make_shared<Data>(new_root, data->size, 0);
+    }
+
+    // Общий случай: клонируем путь
     auto new_root = data->root->clone();
-    
-    // Только путь к изменяемому элементу
     auto node = new_root;
+    auto new_data = std::make_shared<Data>(new_root, data->size, data->shift);
+
     size_t shift = data->shift;
-    
+
     while (shift > 0) {
         size_t pos = (index >> shift) & BIT_MASK;
         auto child = node->children[pos];
-        if (child) {
-            child = child->clone();  // Копируем ТОЛЬКО этот узел
+
+        if (!child) {
+            // Создаем новый путь
+            child = std::make_shared<Node>();
+            node->children[pos] = child;
         }
-        node->children[pos] = child;
+        else {
+            // Клонируем существующий узел
+            child = child->clone();
+            node->children[pos] = child;
+        }
+
         node = child;
         shift -= BITS_PER_LEVEL;
     }
-    
-    // Изменяем значение в листе
+
+    // Устанавливаем значение в листе
     size_t pos = index & BIT_MASK;
+
+    // Обновляем счетчик
+    if (!node->values[pos]) {
+        node->count++;
+    }
+
     node->values[pos] = value;
-    
-    return std::make_shared<Data>(new_root, data->size, data->shift);
+
+    return new_data;
 }
 ```
 
