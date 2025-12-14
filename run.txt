@@ -1,3 +1,8 @@
-cd src
-cl /EHsc /std:c++17 main.cpp
-.\main.exe
+mkdir build
+cd build
+
+cmake ..
+
+cmake --build . --config Debug
+
+.\Debug\persistent_tests.exe

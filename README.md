@@ -1,159 +1,267 @@
-﻿# Проект: Персистентные структуры данных на C++
+﻿# Персистентные структуры данных на C++
+**Персистентность** — это свойство структур данных сохранять все свои предыдущие состояния при изменениях, позволяя к ним обращаться и использовать, что достигается путем создания новых узлов вместо изменения старых и использования ссылок для построения версий (например, в деревьях), а не просто в памяти, но и как постоянное хранение данных на диске или в базе данных, чтобы они переживали завершение программы, реализуя «вечные» объекты. 
 
+---
 ## Архитектура проекта
 
-### 1. **`persistent_data_structure.hpp`**
-**Назначение**: Базовый абстрактный интерфейс для всех персистентных структур
+### 1. Базовый абстрактный интерфейс для всех персистентных структур - **`persistent_data_structure.hpp`**
 
-Определяет единый API для всех структур (вектор, список, мапа). Это позволяет:
-- Единообразно работать с разными структурами
-- Реализовать полиморфизм
-- Упростить разработку фабрик и утилит
+Определяет единый API для всех структур.
 
-### 2. **`persistent_value.hpp/.cpp`**
-**Назначение**: Универсальный контейнер для хранения любых типов данных
+**Базовый интерфейс IPersistentStructure**:
+```cpp
+// Все структуры реализуют эти методы:
+virtual size_t size() const = 0;              // Размер структуры
+virtual bool empty() const = 0;               // Проверка на пустоту
+virtual std::shared_ptr<IPersistentStructure<T>> clear() const = 0;  // Очистка
+virtual std::shared_ptr<IPersistentStructure<T>> clone() const = 0;  // Копирование
+```
 
-- Хранит значения разных типов через `std::variant`
-- Поддерживает вложенность структур (вектор может содержать другие векторы, списки и т.д.)
+
+### 2. Универсальный контейнер для хранения любых типов данных - **`persistent_value.hpp/.cpp`**
+
+- Хранит значения разных типов данных
+- Поддерживает вложенность структур
 - Обеспечивает проверку типов во время выполнения
 
-**Реализует пункт 1 из дополнительных требований** - "произвольная вложенность данных". Без него была бы строгая типизация:
+### **❗️ Реализует пункт 1 из дополнительных требований** - "произвольная вложенность данных" ❗️
 
-```cpp
-PersistentVector<int> // только int
-// С PersistentValue:
-PersistentVector<PersistentValue> // может содержать что угодно
-```
-
-### 3. **`persistent_vector.hpp` + `persistent_vector_impl.hpp`**
-**Назначение**: Реализация персистентного массива (вектора) с константным временем доступа
+### 3. Реализация персистентного массива (вектора) с константным временем доступа - **`persistent_vector.hpp` + `persistent_vector_impl.hpp`**
 
 **Алгоритм**: Bitmapped Vector Trie (как в Clojure)
-- Вместо копирования всего массива при изменении
-- Создаются только измененные узлы дерева
+- Вместо копирования всего массива при изменении создаются только измененные узлы дерева
 - Неизмененные узлы разделяются между версиями
-- Эффективная персистентная структура O(log₃₂ n) доступа вместо O(n) копирования
 
-**Разделение на .hpp и _impl.hpp**:
-- **`.hpp`** - объявление класса, публичный интерфейс
-- **`_impl.hpp`** - реализация шаблонных методов (техническая необходимость C++)
-
-### 4. **`persistent_list.hpp` + `persistent_list_impl.hpp`**
-**Назначение**: Реализация персистентного двусвязного списка через zipper
-
-- Добавление в начало - O(1)
-- Разделение хвоста между версиями
-
-**Пример использования**:
+**Доступные методы**:
 ```cpp
-auto list1 = PersistentList<int>();
-auto list2 = list1.prepend(3).prepend(2).prepend(1);
-// list2: 1 → 2 → 3
-// list1: (пустой) - исходный список не изменился!
-```
+// Конструкторы
+PersistentVector()                              // Пустой вектор
+PersistentVector(const std::vector<T>& values) // Из std::vector
 
-### 5. **`persistent_map.hpp` + `persistent_map_impl.hpp`**
-**Назначение**: Реализация персистентного ассоциативного массива (словаря)
+// Копирование и очистка
+std::shared_ptr<IPersistentStructure<T>> clone() const     // Поверхностная копия
+std::shared_ptr<IPersistentStructure<T>> clear() const     // Новый пустой вектор
+
+// Базовые операции
+size_t size() const                            // Текущий размер
+bool empty() const                             // Проверка на пустоту
+const T& operator[](size_t index) const        // Доступ по индексу
+const T& get(size_t index) const               // Безопасный доступ
+
+// Модификации (возвращают новую версию)
+PersistentVector set(size_t index, const T& value) const  // Установка значения
+PersistentVector append(const T& value) const            // Добавление в конец
+PersistentVector push_back(const T& value) const         // Синоним для append()
+PersistentVector pop_back() const                        // Удаление последнего
+
+// Итераторы
+Iterator begin() const                            // Итератор на первый элемент
+Iterator end() const                              // Итератор за последним элементом
+
+// Класс итератора
+Iterator(const PersistentVector* v, size_t i)     // Конструктор итератора
+T operator*() const                               // Разыменование итератора
+Iterator& operator++()                            // Префиксный инкремент
+bool operator!=(const Iterator& other) const      // Проверка неравенства
+
+// Преобразования
+std::vector<T> toStdVector() const           // В std::vector
+
+// Вспомогательные методы для работы с деревом
+std::shared_ptr<Node> assocNode(...) const   // Рекурсивное клонирование узла
+const T& getNodeValue(size_t index) const    // Рекурсивный поиск в дереве
+
+// Внутренние операции модификации
+std::shared_ptr<Data> push(const T& value) const  // Внутренняя реализация append
+std::shared_ptr<Data> pop() const                 // Внутренняя реализация pop_back
+```
+### ❗️ **Как реализована персистентность:** Через дерево с копированием пути. ❗️ 
+1. **Структура данных:** Вектор представлен как сбалансированное дерево 
+2. **При изменении элемента:**
+   - От корня до листа с нужным элементом создается **новая цепочка узлов**
+   - Каждый узел в этой цепочке клонируется
+   - Все узлы вне этой цепочки **не копируются**, а переиспользуются
+3. **Разделение памяти:** Неизмененные части дерева физически являются одними и теми же объектами в памяти для всех версий
+
+### 4. Реализация персистентного двусвязного списка через zipper - **`persistent_list.hpp` + `persistent_list_impl.hpp`**
+
+**Доступные методы**:
+```cpp
+// Конструкторы
+PersistentList()                              // Пустой список
+PersistentList(const T& value)               // С одним элементом
+PersistentList(const std::vector<T>& values) // Из std::vector
+
+// Базовые операции
+size_t size() const                          // Размер списка
+bool empty() const                           // Проверка на пустоту
+const T& front() const                       // Первый элемент
+const T& back() const                        // Последний элемент
+const T& at(size_t position) const           // Элемент по позиции
+
+// Модификации (возвращают новую версию)
+PersistentList prepend(const T& value) const   // Добавление в начало
+PersistentList append(const T& value) const    // Добавление в конец
+PersistentList concat(const PersistentList& other) const  // Объединение
+PersistentList insertAt(size_t position, const T& value) const  // Вставка
+PersistentList removeAt(size_t position) const                 // Удаление
+PersistentList tail() const                   // Список без первого элемента
+PersistentList init() const                   // Список без последнего элемента
+PersistentList reverse() const                // Обратный список
+PersistentList take(size_t n) const           // Первые n элементов
+PersistentList drop(size_t n) const           // Без первых n элементов
+
+// Zipper API для навигации
+class ZipperView {
+    ZipperView next() const                    // Следующий элемент
+    ZipperView prev() const                    // Предыдущий элемент
+    ZipperView moveTo(size_t position) const   // Перемещение к позиции
+    PersistentList insertBefore(const T& value) const  // Вставка перед
+    PersistentList insertAfter(const T& value) const   // Вставка после
+    PersistentList removeCurrent() const       // Удаление текущего
+    PersistentList updateCurrent(const T& value) const // Обновление
+    PersistentList toList() const              // Преобразование обратно в список
+    const T& getCurrent() const                // Текущий элемент
+}
+
+ZipperView getZipper(size_t position) const    // Создание zipper'а
+
+// Преобразования
+std::vector<T> toVector() const               // В std::vector
+template<typename Container> Container toContainer() const  // В произвольный контейнер
+```
+### ❗️ **Как реализована персистентность:** Двумя способами в зависимости от операции. ❗️ 
+
+#### **А) Для добавления в начало (`prepend`):**
+1. **Создается новый узел**, который указывает на старую голову списка
+2. **Старый список полностью переиспользуется** как хвост нового
+3. **Ничего не копируется**, кроме одного нового узла
+
+#### **Б) Для других операций (добавление в конец, вставка в середину):**
+Используется **Zipper-подход**:
+1. **Zipper (бегунок)** делит список на три части:
+   - Левая часть (до текущего элемента, в обратном порядке)
+   - Текущий элемент
+   - Правая часть (после текущего элемента)
+2. **При изменении:** Zipper создает новый список, собирая его из:
+   - Неизмененных частей (которые переиспользуются)
+   - Новых элементов (которые создаются)
+3. **Навигация:** Zipper может двигаться по списку, создавая новые представления
+
+### 5. Реализация персистентного ассоциативного массива (словаря) - **`persistent_map.hpp` + `persistent_map_impl.hpp`**
 
 **Алгоритм**: Hash Array Mapped Trie (HAMT)
-- Хеш-таблица + префиксное дерево (trie)
-- Коллизии разрешаются через дерево
-- Эффективные операции: O(log n) в худшем случае
 
-Реализована персистентная версия `std::unordered_map` с сохранением предыдущих версий.
+**Доступные методы**:
+```cpp
+// Конструкторы
+PersistentMap()                                                   // Пустая мапа
+PersistentMap(const std::vector<std::pair<K, V>>& items)         // Из вектора пар
 
-### 6. **`persistent_factory.hpp`**
-**Назначение**: Фабрика для преобразования между структурами
+// Базовые операции
+size_t size() const                                              // Количество пар
+bool empty() const                                               // Проверка на пустоту
+bool contains(const K& key) const                                // Проверка наличия ключа
+const V& at(const K& key) const                                  // Доступ по ключу (бросает исключение)
+std::optional<V> get(const K& key) const                         // Безопасный доступ
 
-**Содержит методы**:
-- `listToVector()` - список → вектор
-- `vectorToList()` - вектор → список  
-- `mapToVector()` - словарь → вектор пар
-- `vectorToMap()` - вектор пар → словарь
+// Модификации (возвращают новую версию)
+PersistentMap set(const K& key, const V& value) const            // Установка/обновление значения
+PersistentMap insert(const K& key, const V& value) const         // Синоним для set()
+PersistentMap erase(const K& key) const                          // Удаление по ключу
+PersistentMap remove(const K& key) const                         // Синоним для erase()
 
-**Здесь реализован пункт 4 из дополнительных требований** - "экономичное преобразование структур". Фабрика старается максимально использовать разделение данных вместо полного копирования.
+// Конструктор итератора
+Iterator(std::shared_ptr<Node> root)                            // Создает итератор для обхода дерева
+
+// Итераторы
+Iterator begin() const                                           // Начало
+Iterator end() const                                             // Конец
+
+// Операторы итератора:
+operator*() const -> const std::pair<K, V>&                     // Разыменование (текущая пара)
+operator++() -> Iterator&                                        // Префиксный инкремент (следующий элемент)
+operator!=(const Iterator& other) const -> bool                 // Сравнение с другим итератором
+
+// Хэширование и индексация
+size_t getIndex(uint32_t bitmap, size_t hash_fragment) const    // Преобразование битовой маски в индекс
+
+// Рекурсивные операции с деревом HAMT
+std::shared_ptr<Node> insertNode(std::shared_ptr<Node> node,
+    size_t hash, const K& key, const V& value, size_t level) const  // Рекурсивная вставка
+
+const V* findNode(std::shared_ptr<Node> node,
+    size_t hash, const K& key, size_t level) const                   // Рекурсивный поиск
+
+// Метод обхода для итератора
+void advance()                                                    // Перемещение к следующему элементу
+```
+
+### ❗️ **Как реализована персистентность:** Через **персистентное хеш-дерево (HAMT)**. ❗️ 
+
+1. **Структура данных:** Комбинация хеш-таблицы и префиксного дерева
+2. **Ключи** распределяются по дереву на основе их хеш-кода
+3. **При добавлении/изменении пары ключ-значение:**
+   - От корня до листа создается новая цепочка узлов
+   - В листовом узле добавляется/изменяется запись
+   - Если узел переполняется - он делится на несколько дочерних
+4. **Коллизии** хранятся в маленьких массивах в листах
+
+### 6. Фабрика для преобразования между структурами - **`persistent_factory.hpp`**
+
+**Доступные методы**:
+```cpp
+// Преобразования между списками и векторами
+template<typename T>
+static PersistentVector<T> listToVector(const PersistentList<T>& list)
+
+template<typename T>
+static PersistentList<T> vectorToList(const PersistentVector<T>& vector)
+
+// Преобразования с участием словарей
+template<typename K, typename V>
+static PersistentVector<std::pair<K, V>> mapToVector(const PersistentMap<K, V>& map)
+
+template<typename K, typename V>
+static PersistentList<std::pair<K, V>> mapToList(const PersistentMap<K, V>& map)
+
+template<typename K, typename V>
+static PersistentMap<K, V> vectorToMap(const std::vector<std::pair<K, V>>& vec)
+
+template<typename K, typename V>
+static PersistentMap<K, V> persistentVectorToMap(const PersistentVector<std::pair<K, V>>& vec)
+```
+### ❗️ **Как реализована персистентность:** Через **умное переиспользование**. ❗️
+
+**Конкретный механизм:**
+1. **При преобразовании** между структурами фабрика старается **максимально использовать существующие данные**
+2. **Пример:** Преобразование списка в вектор:
+   - Не копирует все элементы заново
+   - Использует существующие узлы списка при создании дерева вектора
+   - Там, где возможно, сохраняет те же объекты в памяти
+3. **Цель:** Минимизировать копирование при сохранении персистентности
+### ❗️ **Реализует пункт 4 из дополнительных требований** - "экономичное преобразование структур". Фабрика старается максимально использовать разделение данных вместо полного копирования. ❗️
 
 ---
 
 ## Реализация пункта 3: "Более эффективное представление чем fat-node"
 
 ### **1. PersistentVector (persistent_vector.hpp/impl.hpp)**
-
-**Fat-node (неэффективный подход)**:
-```cpp
-// Fat-node подход: каждый узел хранит ВСЕ версии
-struct FatNode {
-    std::vector<std::pair<Version, Value>> history;
-    // При доступе нужно искать по версии - O(log m)
-};
-```
-
-**Наш подход (эффективный)**:
-```cpp
-struct Node {
-    // Одна версия значения, не история!
-    std::optional<T> values[BRANCHING_FACTOR];
-    // Разделение через неизменяемость
-};
-```
-
 **В коде (persistent_vector_impl.hpp)**:
 ```cpp
+// Алгоритм вставки по индексу элемента (новый вектор)
 template<typename T>
-const T& PersistentVector<T>::getNodeValue(size_t index) const {
-    // Проверка на корректность индекса
-    if (index >= data->size) {
+PersistentVector<T> PersistentVector<T>::set(size_t index, const T& value) const {
+    if (index >= size()) {
         throw std::out_of_range("Index out of range");
     }
 
-    // Если вектор пустой (не должно случиться из-за проверки выше)
-    if (empty()) {
-        throw std::runtime_error("Vector is empty");
-    }
+    auto newRoot = assocNode(data->root, data->shift, index, value);
+    auto newData = std::make_shared<Data>(newRoot, data->size, data->shift);
 
-    auto node = data->root;
-    size_t shift = data->shift;
-
-    // Если shift = 0, значит все элементы в корневом узле
-    if (shift == 0) {
-        // Все элементы в корневом узле
-        if (index >= BRANCHING_FACTOR) {
-            throw std::out_of_range("Index out of range for leaf node");
-        }
-
-        if (!node->values[index]) {
-            throw std::runtime_error("Value not found in leaf node");
-        }
-
-        return *node->values[index];
-    }
-
-    // Иначе спускаемся по дереву
-    while (shift > 0) {
-        size_t pos = (index >> shift) & BIT_MASK;
-
-        // Проверяем, существует ли дочерний узел
-        if (!node->children[pos]) {
-            // Отладочная информация
-            std::cerr << "DEBUG: getNodeValue - child not found at pos=" << pos
-                << ", shift=" << shift << ", index=" << index << std::endl;
-            throw std::runtime_error("Internal error: child node not found");
-        }
-
-        node = node->children[pos];
-        shift -= BITS_PER_LEVEL;
-    }
-
-    // Достигли листа
-    size_t pos = index & BIT_MASK;
-
-    if (!node->values[pos]) {
-        std::cerr << "DEBUG: getNodeValue - value not found at leaf pos=" << pos
-            << ", index=" << index << std::endl;
-        throw std::runtime_error("Internal error: value not found in leaf");
-    }
-
-    return *node->values[pos];
+    PersistentVector result;
+    result.data = newData;
+    return result;
 }
 ```
 
@@ -161,64 +269,22 @@ const T& PersistentVector<T>::getNodeValue(size_t index) const {
 **Hash Array Mapped Trie (HAMT) вместо fat-node**
 
 ```cpp
+// Утсановка нового значения с возвращением новго массива
 template<typename K, typename V>
-std::shared_ptr<typename PersistentMap<K, V>::Node>
-PersistentMap<K, V>::insertNode(std::shared_ptr<Node> node,
-    size_t hash, const K& key,
-    const V& value, size_t level) const {
-    if (!node) {
-        node = std::make_shared<Node>();
-    }
+PersistentMap<K, V> PersistentMap<K, V>::set(const K& key, const V& value) const {
+    // Вычиление нового хэша и создание новго дерев с добавлением узла
+    size_t hash = hasher(key);
+    auto new_root = insertNode(root, hash, key, value, 0);
 
-    auto new_node = node->clone();
+    PersistentMap<K, V> result;
+    result.root = new_root;
 
-    // Если это листовой узел или имеет записи
-    if (!new_node->entries.empty()) {
-        bool found = false;
+    // Размер увеличаваем, если ключа не было
+    const V* existing = findNode(root, hash, key, 0);
+    result.map_size = existing ? map_size : map_size + 1;
 
-        // Проверяем, есть ли уже такой ключ
-        for (auto& [k, v] : new_node->entries) {
-            if (k == key) {
-                v = value;  // Обновляем существующее значение
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            // Добавляем новую запись
-            new_node->entries.emplace_back(key, value);
-
-            // Проверяем, не нужно ли разделить узел
-            if (new_node->entries.size() > BRANCHING_FACTOR / 2 &&
-                level < (sizeof(size_t) * 8 / BITS_PER_LEVEL)) {
-
-                // Разделяем узел
-                auto split_node = std::make_shared<Node>();
-                for (const auto& [k, v] : new_node->entries) {
-                    size_t entry_hash = hasher(k);
-                    size_t fragment = (entry_hash >> (level * BITS_PER_LEVEL)) & BIT_MASK;
-
-                    if (!(split_node->bitmap & (1 << fragment))) {
-                        split_node->bitmap |= (1 << fragment);
-                        size_t index = getIndex(split_node->bitmap, fragment);
-                        split_node->children.insert(
-                            split_node->children.begin() + index,
-                            std::make_shared<Node>()
-                        );
-                    }
-
-                    size_t index = getIndex(split_node->bitmap, fragment);
-                    split_node->children[index] = insertNode(
-                        split_node->children[index],
-                        entry_hash, k, v, level + 1
-                    );
-                }
-                return split_node;
-            }
-        }
-        return new_node;
-    }
+    return result;
+}
 ```
 
 ### **3. Чем наш подход лучше fat-node?**
@@ -234,93 +300,55 @@ PersistentMap<K, V>::insertNode(std::shared_ptr<Node> node,
 - Доступ: `O(log n)` где `n` = размер структуры
 - Память: только последняя версия + разделяемые части
 
-### **4. Конкретная демонстрация эффективности**
-В файле `persistent_vector_impl.hpp`:
+### **Пример на vector:**
 
+#### **Обычный `std::vector`:**
+- Изменение: Модифицирует существующий объект
+- Копирование: Полное копирование всех элементов
+- Версионность: Невозможна без явного копирования
+
+#### **Наш `PersistentVector`:**
+- Изменение: Возвращает новый объект, старый неизменен
+- Копирование: Только измененные части дерева
+- Версионность: Встроена в саму структуру
+
+
+## Примеры использования
+
+### Работа с вектором
 ```cpp
-template<typename T>
-PersistentVector<T> PersistentVector<T>::set(size_t index, const T& value) const {
-    if (index >= size()) {
-        throw std::out_of_range("Index out of range");
-    }
+PersistentVector<int> vec1;
+auto vec2 = vec1.append(1).append(2).append(3);
+auto vec3 = vec2.set(1, 42);  // Изменяем второй элемент
 
-    PersistentVector result;
-    result.data = assoc(index, value);
-    return result;
-}
+// vec2 остается неизменным: [1, 2, 3]
+// vec3: [1, 42, 3]
+```
 
-// -----------------------------------------
-// ----- Исправленный assoc ----------------
-// -----------------------------------------
-template<typename T>
-std::shared_ptr<typename PersistentVector<T>::Data>
-PersistentVector<T>::assoc(size_t index, const T& value) const {
-    // Если вектор пустой
-    if (empty()) {
-        throw std::runtime_error("Cannot set in empty vector");
-    }
+### Работа со списком и zipper
+```cpp
+PersistentList<int> list;
+auto list2 = list.prepend(3).prepend(2).prepend(1);
 
-    // Если shift = 0 (все элементы в корне)
-    if (data->shift == 0) {
-        auto new_root = data->root->clone();
+auto zipper = list2.getZipper(1);  // Позиция на элементе 2
+auto list3 = zipper.insertAfter(99).toList();  // [1, 2, 99, 3]
+```
 
-        if (index >= BRANCHING_FACTOR) {
-            throw std::out_of_range("Index too large for leaf node");
-        }
+### Работа с массивом
+```cpp
+PersistentMap<std::string, int> map;
+auto map2 = map.set("apple", 5).set("banana", 3);
+auto map3 = map2.set("apple", 10);  // Обновляем значение
 
-        new_root->values[index] = value;
+std::cout << map2.at("apple");  // 5
+std::cout << map3.at("apple");  // 10
+```
 
-        // Обновляем счетчик
-        if (!data->root->values[index]) {
-            // Добавляем новый элемент
-            new_root->count = data->root->count + 1;
-        }
-        else {
-            // Обновляем существующий
-            new_root->count = data->root->count;
-        }
-
-        return std::make_shared<Data>(new_root, data->size, 0);
-    }
-
-    // Общий случай: клонируем путь
-    auto new_root = data->root->clone();
-    auto node = new_root;
-    auto new_data = std::make_shared<Data>(new_root, data->size, data->shift);
-
-    size_t shift = data->shift;
-
-    while (shift > 0) {
-        size_t pos = (index >> shift) & BIT_MASK;
-        auto child = node->children[pos];
-
-        if (!child) {
-            // Создаем новый путь
-            child = std::make_shared<Node>();
-            node->children[pos] = child;
-        }
-        else {
-            // Клонируем существующий узел
-            child = child->clone();
-            node->children[pos] = child;
-        }
-
-        node = child;
-        shift -= BITS_PER_LEVEL;
-    }
-
-    // Устанавливаем значение в листе
-    size_t pos = index & BIT_MASK;
-
-    // Обновляем счетчик
-    if (!node->values[pos]) {
-        node->count++;
-    }
-
-    node->values[pos] = value;
-
-    return new_data;
-}
+### Использование фабрики
+```cpp
+PersistentList<int> list = PersistentList<int>({1, 2, 3, 4, 5});
+auto vector = PersistentFactory::listToVector(list);
+auto map = PersistentFactory::vectorToMap({{"a", 1}, {"b", 2}});
 ```
 
 ---
@@ -333,23 +361,23 @@ PersistentVector<T>::assoc(size_t index, const T& value) const {
                     │    (вложенность)    │
                     └──────────┬──────────┘
                                │
-         ┌─────────────┬─────────────┬─────────────┐
-         │             │             │             │
-         ▼             ▼             ▼             ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│  persistent  │ │  persistent  │ │  persistent  │ │  persistent  │
-│   vector     │ │    list      │ │     map      │ │   factory    │
-│  (массив)    │ │  (список)    │ │ (словарь)    │ │(преобразования)│
-└──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └──────────────┘
+         ┌─────────────┬─────────────────┬───────────────┐
+         │             │                 │               │
+         ▼             ▼                 ▼               ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────────┐
+│  persistent  │ │  persistent  │ │  persistent  │ │   persistent   │
+│   vector     │ │    list      │ │     map      │ │    factory     │
+│  (массив)    │ │  (список)    │ │  (словарь)   │ │(преобразования)│
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └────────────────┘
        │                │                │
        └────────┬───────┴───────┬────────┘
                 │               │
                 ▼               ▼
-         ┌─────────────┐ ┌─────────────┐
-         │ IPersistent │ │  Алгоритмы: │
+         ┌─────────────┐ ┌──────────────┐
+         │ IPersistent │ │  Алгоритмы:  │
          │ Structure   │ │ • VectorTrie │
-         │ (интерфейс) │ │ • HAMT      │
-         └─────────────┘ └─────────────┘
+         │ (интерфейс) │ │ • HAMT       │
+         └─────────────┘ └──────────────┘
 ```
 
 ## Структура проекта
@@ -378,9 +406,186 @@ persistent_project/
 # Перейдите в папку проекта
 cd C:\путь\к\проекту\src
 
+# Создайте папку сборки проекта
+mkdir build
+cd build
+
 # Скомпилируйте программу
-cl /EHsc /std:c++17 main.cpp
+cmake ..
+cmake --build . --config Debug
 
 # Запустите скомпилированную программу
-.\main.exe
+.\Debug\persistent_tests.exe
 ```
+# Тесты
+
+## **PersistentVectorTest** (Тесты для неизменяемого вектора)
+
+### 1. `EmptyVectorCreation` - Создание пустого вектора
+- Проверяет корректность создания пустого вектора
+- Убеждается, что вектор действительно пуст (empty() = true)
+- Проверяет размер равен 0
+
+### 2. `AppendingElements` - Добавление элементов
+- Тестирует последовательное добавление элементов
+- Проверяет, что размер увеличивается правильно
+- Убеждается, что элементы сохраняются в правильном порядке
+
+### 3. `ModifyingElements` - Изменение элементов
+- Тестирует метод set() для изменения существующих элементов
+- Проверяет, что оригинальный вектор остаётся неизменным
+- Убеждается, что новый вектор содержит изменённые значения
+
+### 4. `RemovingElementsPopBack` - Удаление элементов (pop_back)
+- Проверяет удаление последнего элемента
+- Убеждается, что размер уменьшается на 1
+- Проверяет, что оригинальный вектор не изменяется
+
+### 5. `IndexAccess` - Доступ по индексу
+- Тестирует получение элементов по индексу
+- Проверяет корректность работы с различными типами данных (std::string)
+
+### 6. `ExceptionHandling` - Обработка исключений
+- Проверяет выбрасывание исключений при выходе за границы
+- Тестирует get() с недопустимым индексом
+- Тестирует set() с недопустимым индексом
+
+### 7. `OperationChaining` - Цепочки операций
+- Тестирует последовательное выполнение операций
+- Проверяет корректность работы комбинаций методов
+
+### 8. `VectorComparison` - Сравнение векторов
+- (Закомментирован) Предполагает проверку равенства векторов
+- Тестировал бы сравнение через toString() если бы был реализован
+
+### 9. `VectorWithDifferentTypes` - Векторы разных типов
+- Тестирует работу с int, string, double
+- Проверяет типизацию шаблонного класса
+
+### 10. `PerformanceTest` - Тест производительности
+- Проверяет производительность при добавлении 1000 элементов
+- Тестирует масштабируемость структуры данных
+
+## **PersistentListTest** (Тесты для неизменяемого списка)
+
+### 1. `EmptyListCreation` - Создание пустого списка
+- Аналогично вектору, проверяет пустой список
+
+### 2. `PrependingElements` - Добавление в начало
+- Тестирует prepend() для добавления элементов в начало
+- Проверяет порядок элементов (LIFO)
+
+### 3. `GettingTail` - Получение хвоста списка
+- Тестирует метод tail()
+- Проверяет, что tail() возвращает список без первого элемента
+- Убеждается в корректности размеров
+
+### 4. `ConcatenatingLists` - Конкатенация списков
+- Тестирует объединение двух списков
+- Проверяет порядок элементов после конкатенации
+
+### 5. `ExceptionHandling` - Обработка исключений
+- Проверяет исключения для пустого списка
+- Тестирует front() и tail() на пустом списке
+
+### 6. `OperationChaining` - Цепочки операций
+- Тестирует комбинации методов списка
+
+### 7. `ListComparison` - Сравнение списков
+- (Закомментирован) Предполагаемая проверка равенства списков
+
+### 8. `ListWithDifferentTypes` - Списки разных типов
+- Тестирует списки с int, string, double
+
+### 9. `ImmutabilityTest` - Проверка неизменяемости
+- Тестирует основное свойство persistent структур
+- Убеждается, что операции создают новые объекты, не изменяя старые
+
+### 10. `LargeListTest` - Большой список
+- Тестирует производительность при добавлении 100 элементов
+- Проверяет корректность последовательного обхода
+
+## **PersistentMapTest** (Тесты для неизменяемого массива)
+
+### 1. `EmptyMapCreation` - Создание пустой массива
+- Проверяет создание пустого массива
+
+### 2. `AddingElements` - Добавление элементов
+- Тестирует set() для добавления пар ключ-значение
+- Проверяет увеличение размера
+
+### 3. `UpdatingElements` - Обновление элементов
+- Тестирует перезапись значений по существующему ключу
+- Проверяет, что оригинальный массив не изменяется
+
+### 4. `RemovingElements` - Удаление элементов
+- Тестирует erase() для удаления по ключу
+- Проверяет наличие/отсутствие ключей
+
+### 5. `CheckingKeyExistence` - Проверка наличия ключа
+- Тестирует метод contains()
+- Проверяет как существующие, так и отсутствующие ключи
+
+### 6. `AccessingValues` - Доступ к значениям
+- Тестирует метод at() для получения значений
+
+### 7. `ExceptionHandling` - Обработка исключений
+- Проверяет at() с несуществующим ключом
+
+### 8. `OperationChaining` - Цепочки операций
+- Тестирует комбинации set(), erase()
+
+### 9. `MapWithDifferentValueTypes` - Массивы с разными типами значений
+- Тестирует массивы с int, string, double значениями
+
+### 10. `LargeMapTest` - Большая массив
+- Тестирует производительность при добавлении 100 элементов
+
+### 11. `ImmutabilityTest` - Проверка неизменяемости
+- Проверяет, что операции не модифицируют оригинальные массивы
+
+### 12. `MapComparison` - Сравнение миссивов
+- (Закомментирован) Предполагаемое сравнение массивов
+
+## **NestingTest** (Тесты для вложенных структур)
+
+### 1. `VectorOfVectors` - Вектор векторов
+- Тестирует вложение векторов друг в друга
+- Проверяет доступ к элементам вложенных структур
+
+### 2. `ListOfLists` - Список списков
+- Тестирует вложение списков
+- Проверяет корректность размеров и элементов
+
+### 3. `MapWithVectorValues` - Массив со значениями-векторами
+- Тестирует массив, где значения являются векторами
+- Проверяет сложную структуру данных
+
+### 4. `DeepNesting` - Глубокое вложение
+- Тестирует многоуровневые структуры (списки в массивах в векторах)
+- Проверяет корректность работы с глубокими структурами
+
+### 5. `PersistentValueConstructors` - Конструкторы PersistentValue
+- Тестирует создание PersistentValue разных типов
+- Проверяет методы определения типа (isInt, isDouble и т.д.)
+- Тестирует преобразование значений
+
+### 6. `ModifyingNestedStructures` - Модификация вложенных структур
+- Тестирует изменение элементов в сложных структурах
+- Проверяет неизменяемость оригинальных структур
+
+## **EdgeCasesTest** (Тесты граничных случаев)
+
+### 1. `VectorWithMaximumOperations` - Вектор с максимальным количеством операций
+- Тестирует смешанные операции (append + set)
+- Проверяет стабильность при интенсивном использовании
+
+### 2. `ListWithOperationAlternation` - Список с чередованием операций
+- Тестирует чередование разных операций над списками
+
+### 3. `MapWithOverwriteChain` - Массив с цепочкой перезаписей
+- Тестирует многократную перезапись одного ключа
+- Проверяет конечное значение
+
+### 4. `CombinedStructures` - Комбинированные структуры
+- Тестирует сложные комбинации разных структур данных

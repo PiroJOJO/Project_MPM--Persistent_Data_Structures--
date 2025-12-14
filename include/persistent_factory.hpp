@@ -17,7 +17,7 @@ public:
         PersistentVector<T> result;
         std::cout << "DEBUG: listToVector called, list size = " << list.size() << std::endl;
 
-        // Через итераторы
+        // begin()/end()
         try {
             auto it = list.begin();
             auto end = list.end();
@@ -27,16 +27,13 @@ public:
             }
             return result;
         }
-        catch (...) {
-        }
-
-        // Через Container
+        catch (...) {}
+        // toContainer()
         try {
             auto temp = list.template toContainer<std::vector<T>>();
             return PersistentVector<T>(temp);
         }
-        catch (...) {
-        }
+        catch (...) {}
         return result;
     }
 
@@ -46,17 +43,16 @@ public:
     template<typename T>
     static PersistentList<T> vectorToList(const PersistentVector<T>& vector) {
         PersistentList<T> result;
-
         std::cout << "DEBUG: vectorToList called, vector size = " << vector.size() << std::endl;
 
         for (size_t i = vector.size(); i > 0; --i) {
             try {
-                // Через operator[]
+                // operator[]
                 result = result.prepend(vector[i - 1]);
             }
             catch (...) {
                 try {
-                    // Через get()
+                    // get()
                     result = result.prepend(vector.get(i - 1));
                 }
                 catch (...) {
@@ -76,7 +72,7 @@ public:
         PersistentVector<std::pair<K, V>> result;
         std::cout << "DEBUG: mapToVector called" << std::endl;
 
-        // Через итераторы
+        // итераторы
         try {
             auto it = map.begin();
             auto end = map.end();
@@ -97,10 +93,9 @@ public:
     template<typename K, typename V>
     static PersistentList<std::pair<K, V>> mapToList(const PersistentMap<K, V>& map) {
         PersistentList<std::pair<K, V>> result;
-
         std::cout << "DEBUG: mapToList called" << std::endl;
 
-        // Сначала преобразуем в вектор, затем в список
+        // в вектор, затем в список
         auto vec = mapToVector(map);
         return vectorToList(vec);
     }
@@ -116,6 +111,7 @@ public:
         for (const auto& pair : vec) {
             result = result.set(pair.first, pair.second);
         }
+
         return result;
     }
 
@@ -129,7 +125,7 @@ public:
         // PersistentVector -> std::vector -> vectorToMap
         std::vector<std::pair<K, V>> temp;
 
-        // Через итераторы
+        // итераторы
         try {
             auto it = vec.begin();
             auto end = vec.end();
@@ -139,6 +135,7 @@ public:
             }
         }
         catch (...) {
+            // operator[] или get()
             for (size_t i = 0; i < vec.size(); ++i) {
                 try {
                     temp.push_back(vec[i]);

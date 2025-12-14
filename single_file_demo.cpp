@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <functional>
 
-//  PersistentVector
+// PersistentVector
 template<typename T>
 class SimplePersistentVector {
 private:
@@ -36,7 +36,7 @@ public:
     }
 };
 
-// PersistentList
+//  PersistentList
 template<typename T>
 class SimplePersistentList {
 private:

@@ -3,7 +3,7 @@
 
 #include "persistent_vector.hpp"
 #include <stack>
-#include <iostream>  
+#include <iostream>
 
 // -----------------------------------------
 // ---------- Реализация массива -----------
@@ -23,8 +23,7 @@ PersistentVector<T>::PersistentVector() : data(std::make_shared<Data>()) {
 // -----------------------------------------
 template<typename T>
 PersistentVector<T>::PersistentVector(const std::vector<T>& values) : data(std::make_shared<Data>()) {
-    data->shift = 0;  // Начинаем с shift = 0
-
+    data->shift = 0;
     for (const auto& value : values) {
         data = push(value);
     }
@@ -93,9 +92,11 @@ const T& PersistentVector<T>::getNodeValue(size_t index) const {
         if (index >= BRANCHING_FACTOR) {
             throw std::out_of_range("Index out of range for leaf node");
         }
+
         if (!node->values[index]) {
             throw std::runtime_error("Value not found in leaf node");
         }
+
         return *node->values[index];
     }
 
@@ -104,23 +105,18 @@ const T& PersistentVector<T>::getNodeValue(size_t index) const {
         // Поиск потомка, содержащего элемент
         size_t pos = (index >> shift) & BIT_MASK;
 
-        // Проверяем, существует ли дочерний узел
+        // Проверяем, существует ли узел потомка
         if (!node->children[pos]) {
-            std::cerr << "DEBUG: getNodeValue - child not found at pos=" << pos
-                << ", shift=" << shift << ", index=" << index << std::endl;
             throw std::runtime_error("Internal error: child node not found");
         }
 
         node = node->children[pos];
         shift -= BITS_PER_LEVEL;
     }
-
     // Извлечение значения из найденного узла
     size_t pos = index & BIT_MASK;
 
     if (!node->values[pos]) {
-        std::cerr << "DEBUG: getNodeValue - value not found at leaf pos=" << pos
-            << ", index=" << index << std::endl;
         throw std::runtime_error("Internal error: value not found in leaf");
     }
 
@@ -130,81 +126,63 @@ const T& PersistentVector<T>::getNodeValue(size_t index) const {
 // -----------------------------------------
 // ------ Вставка элемента по индексу ------
 // -----------------------------------------
+// Алгоритм вставки по индексу элемента 
+template<typename T>
+std::shared_ptr<typename PersistentVector<T>::Node>
+PersistentVector<T>::assocNode(std::shared_ptr<typename PersistentVector<T>::Node> node,
+    size_t shift, size_t index, const T& value) const {
+    // Если shift = 0 (все элементы в корне)
+    if (shift == 0) {
+        auto newNode = node->clone();
+        size_t pos = index & BIT_MASK;
+        // Обновляем счетчик
+        if (!node->values[pos].has_value()) {
+            // Добавляем новый элемент
+            newNode->count = node->count + 1;
+        }
+        // Обновляем существующий
+        newNode->values[pos] = value;
+
+        return newNode;
+    }
+    // Общий случай: клонируем путь
+    auto newNode = node->clone();
+    // Устанавливаем значение в листе
+    size_t pos = (index >> shift) & BIT_MASK;
+
+    if (!node->children[pos]) {
+        // Если не существует - создаем новый
+        auto child = std::make_shared<Node>();
+        newNode->children[pos] = assocNode(child, shift - BITS_PER_LEVEL, index, value);
+    }
+    else {
+        // Иначе - клонируем в новый вектор
+        newNode->children[pos] = assocNode(node->children[pos], shift - BITS_PER_LEVEL, index, value);
+    }
+    // Обновляем счетчик
+    newNode->count = 0;
+    for (size_t i = 0; i < BRANCHING_FACTOR; ++i) {
+        if (newNode->children[i]) {
+            newNode->count += newNode->children[i]->count;
+        }
+    }
+
+    return newNode;
+}
+
+// Алгоритм вставки по индексу элемента (новый вектор)
 template<typename T>
 PersistentVector<T> PersistentVector<T>::set(size_t index, const T& value) const {
     if (index >= size()) {
         throw std::out_of_range("Index out of range");
     }
 
+    auto newRoot = assocNode(data->root, data->shift, index, value);
+    auto newData = std::make_shared<Data>(newRoot, data->size, data->shift);
+
     PersistentVector result;
-    result.data = assoc(index, value);
+    result.data = newData;
     return result;
-}
-
-// Алгоритм вставки по индексу элемента (новый вектор)
-template<typename T>
-std::shared_ptr<typename PersistentVector<T>::Data>
-PersistentVector<T>::assoc(size_t index, const T& value) const {
-    // Если вектор пустой
-    if (empty()) {
-        throw std::runtime_error("Cannot set in empty vector");
-    }
-
-    // Если shift = 0 (все элементы в корне)
-    if (data->shift == 0) {
-        auto new_root = data->root->clone();
-
-        if (index >= BRANCHING_FACTOR) {
-            throw std::out_of_range("Index too large for leaf node");
-        }
-        new_root->values[index] = value;
-        // Обновляем счетчик
-        if (!data->root->values[index]) {
-            // Добавляем новый элемент
-            new_root->count = data->root->count + 1;
-        }
-        else {
-            // Обновляем существующий
-            new_root->count = data->root->count;
-        }
-
-        return std::make_shared<Data>(new_root, data->size, 0);
-    }
-
-    // Общий случай: клонируем путь
-    auto new_root = data->root->clone();
-    auto node = new_root;
-    auto new_data = std::make_shared<Data>(new_root, data->size, data->shift);
-
-    size_t shift = data->shift;
-    while (shift > 0) {
-        size_t pos = (index >> shift) & BIT_MASK;
-        auto child = node->children[pos];
-
-        if (!child) {
-            // Если не существует - создаем новый
-            child = std::make_shared<Node>();
-            node->children[pos] = child;
-        }
-        else {
-            // Иначе - клонируем в новый вектор
-            child = child->clone();
-            node->children[pos] = child;
-        }
-
-        node = child;
-        shift -= BITS_PER_LEVEL;
-    }
-
-    // Устанавливаем значение в листе
-    size_t pos = index & BIT_MASK;
-    // Обновляем счетчик
-    if (!node->values[pos]) {
-        node->count++;
-    }
-    node->values[pos] = value;
-
-    return new_data;
 }
 
 // -----------------------------------------
@@ -229,46 +207,49 @@ PersistentVector<T>::push(const T& value) const {
         return std::make_shared<Data>(root, 1, 0);
     }
 
-    // Очевидный случай: Есть место в текущем корне (shift = 0)
-    if (data->shift == 0 && data->size < BRANCHING_FACTOR) {
-        auto new_root = data->root->clone();
-        new_root->values[data->size] = value;
-        new_root->count = data->size + 1;
-        return std::make_shared<Data>(new_root, data->size + 1, 0);
+    size_t depth = data->shift / BITS_PER_LEVEL + 1;
+    size_t capacity = 1;
+    for (size_t i = 0; i < depth; ++i) {
+        capacity *= BRANCHING_FACTOR;
     }
-    // Очевидный случай: Нужно увеличивать глубину
-    // Упрощенная реализация - бросаем исключение
-    throw std::runtime_error("push: vector too large, need to implement tree expansion");
-}
 
+    // Очевидный случай: Есть место в текущем корне (shift = 0)
+    if (data->size < capacity) {
+        // Есть место в текущем дереве
+        auto newRoot = assocNode(data->root, data->shift, data->size, value);
+        return std::make_shared<Data>(newRoot, data->size + 1, data->shift);
+    }
+    else {
+        // Нужно увеличить глубину
+        auto newRoot = std::make_shared<Node>();
+        newRoot->children[0] = data->root;
+        size_t newShift = data->shift + BITS_PER_LEVEL;
+
+        auto updatedRoot = assocNode(newRoot, newShift, data->size, value);
+        return std::make_shared<Data>(updatedRoot, data->size + 1, newShift);
+    }
+}
 // -----------------------------------------
 // ----- Удаление последнего элемента ------
 // -----------------------------------------
+// Реализация удаления последнего элемента
 template<typename T>
 PersistentVector<T> PersistentVector<T>::pop_back() const {
+    // Очевидный случай
     if (empty()) {
         throw std::runtime_error("Cannot pop from empty vector");
     }
 
-    PersistentVector result;
-    result.data = pop();
-    return result;
-}
-// Реализация удаления последнего элемента
-template<typename T>
-std::shared_ptr<typename PersistentVector<T>::Data>
-PersistentVector<T>::pop() const {
-    // Очевидный случай
-    if (data->size == 0) {
-        return std::make_shared<Data>();
-    }
     if (data->size == 1) {
-        return std::make_shared<Data>();
+        return PersistentVector<T>();
     }
-
     // Уменьшаем счетчик
-    auto new_root = data->root->clone();
-    return std::make_shared<Data>(new_root, data->size - 1, data->shift);
+    auto newRoot = data->root->clone();
+    auto newData = std::make_shared<Data>(newRoot, data->size - 1, data->shift);
+
+    PersistentVector result;
+    result.data = newData;
+    return result;
 }
 
 // -----------------------------------------
@@ -278,19 +259,12 @@ template<typename T>
 std::vector<T> PersistentVector<T>::toStdVector() const {
     std::vector<T> result;
     result.reserve(size());
-
-    // Простой обход для небольших векторов
+    // Простой обход 
     for (size_t i = 0; i < size(); ++i) {
-        try {
-            result.push_back(get(i));
-        }
-        catch (const std::exception& e) {
-            std::cerr << "Error getting element at index " << i << ": " << e.what() << std::endl;
-            throw;
-        }
+        result.push_back(get(i));
     }
 
     return result;
 }
 
-#endif 
+#endif

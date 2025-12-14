@@ -37,11 +37,12 @@ PersistentMap<K, V>::PersistentMap()
 template<typename K, typename V>
 PersistentMap<K, V>::PersistentMap(const std::vector<std::pair<K, V>>& items)
     : root(std::make_shared<Node>()), map_size(0) {
+    PersistentMap<K, V> current;
     for (const auto& [key, value] : items) {
-        auto new_map = set(key, value);
-        root = new_map.root;
-        map_size = new_map.map_size;
+        current = current.set(key, value);
     }
+    root = current.root;
+    map_size = current.map_size;
 }
 
 // -----------------------------------------
@@ -84,12 +85,15 @@ template<typename K, typename V>
 size_t PersistentMap<K, V>::getIndex(uint32_t bitmap, size_t hash_fragment) const {
     // Проверка границ
     if (hash_fragment >= 32) {
-        return 0;  // OR исключение
+        return 0;  // или можно бросить исключение
     }
+
     // Создаем маску для битов до hash_fragment
     uint32_t mask = (hash_fragment == 0) ? 0 : ((1u << hash_fragment) - 1);
+
     // Применяем маску к bitmap
     uint32_t masked = bitmap & mask;
+
     // Подсчитываем установленные биты
     return persistent_map_detail::popcount(masked);
 }
@@ -101,26 +105,29 @@ size_t PersistentMap<K, V>::getIndex(uint32_t bitmap, size_t hash_fragment) cons
 template<typename K, typename V>
 bool PersistentMap<K, V>::contains(const K& key) const {
     size_t hash = hasher(key);
-    auto result = findNode(root, hash, key, 0);
-    return result.has_value();
+    return findNode(root, hash, key, 0) != nullptr;
 }
 
 // Получение значения по ключу
 template<typename K, typename V>
 const V& PersistentMap<K, V>::at(const K& key) const {
     size_t hash = hasher(key);
-    auto value = findNode(root, hash, key, 0);
-    if (!value.has_value()) {
+    const V* value = findNode(root, hash, key, 0);
+    if (!value) {
         throw std::out_of_range("Key not found");
     }
-    return value.value();
+    return *value;
 }
 
 // Получение узла по ключу
 template<typename K, typename V>
 std::optional<V> PersistentMap<K, V>::get(const K& key) const {
     size_t hash = hasher(key);
-    return findNode(root, hash, key, 0);
+    const V* value = findNode(root, hash, key, 0);
+    if (value) {
+        return *value;
+    }
+    return std::nullopt;
 }
 
 // -----------------------------------------
@@ -128,35 +135,39 @@ std::optional<V> PersistentMap<K, V>::get(const K& key) const {
 // -----------------------------------------
 // Поиск элемента по ключу и значению
 template<typename K, typename V>
-std::optional<V> PersistentMap<K, V>::findNode(std::shared_ptr<Node> node,
+const V* PersistentMap<K, V>::findNode(std::shared_ptr<Node> node,
     size_t hash, const K& key,
     size_t level) const {
     if (!node) {
-        return std::nullopt;
+        return nullptr;
     }
+
     // Очевидные случаи
     // Если лист, то ищем в нем значения
     if (!node->entries.empty()) {
-        for (const auto& [k, v] : node->entries) {
-            if (k == key) {
-                return v;
-            }
-        }
-        return std::nullopt;
-    }
-    // Если в узле нет потомков
-    if (node->children.empty()) {
-        return std::nullopt;
+        return node->findValue(key);
     }
 
-    // Вычисление хэша для текующего уровня и получение индекса в массиве потомков
+    // Если узел пустой
+    if (node->children.empty()) {
+        return nullptr;
+    }
+
+    // Вычисляем фрагмент хэша для текущего уровня
     size_t hash_fragment = (hash >> (level * BITS_PER_LEVEL)) & BIT_MASK;
+
     // Если не сщуетсвует потомка с вычисленным фрагментом
     if (!(node->bitmap & (1 << hash_fragment))) {
-        return std::nullopt;
+        return nullptr;
     }
+
     // Получаем индекс потомка
     size_t index = getIndex(node->bitmap, hash_fragment);
+
+    // Проверяем границы
+    if (index >= node->children.size()) {
+        return nullptr;
+    }
 
     // Рекурсивно ищем в найденном потомке
     return findNode(node->children[index], hash, key, level + 1);
@@ -173,8 +184,8 @@ PersistentMap<K, V> PersistentMap<K, V>::set(const K& key, const V& value) const
     result.root = new_root;
 
     // Размер увеличаваем, если ключа не было
-    bool key_exists = contains(key);
-    result.map_size = map_size + (key_exists ? 0 : 1);
+    const V* existing = findNode(root, hash, key, 0);
+    result.map_size = existing ? map_size : map_size + 1;
 
     return result;
 }
@@ -190,41 +201,48 @@ PersistentMap<K, V>::insertNode(std::shared_ptr<Node> node,
     if (!node) {
         node = std::make_shared<Node>();
     }
+
     auto new_node = node->clone();
 
-    // Узел является листом или имеет записи
-    if (!new_node->entries.empty()) {
-        bool found = false;
-        // Обновление существующего ключа
-        for (auto& [k, v] : new_node->entries) {
-            if (k == key) {
-                v = value;  // Обновляем существующее значение
-                found = true;
-                break;
-            }
+    // Узел является листом или не имеет записи
+    if (!new_node->entries.empty() || new_node->children.empty()) {
+        // Используем метод updateOrAdd
+        bool was_updated = new_node->updateOrAdd(key, value);
+
+        // Если ключ уже существовал, просто возвращаем обновленный узел
+        if (was_updated) {
+            return new_node;
         }
 
-        if (!found) {
-            // Добавление новой пары (ключ, значение)
-            new_node->entries.emplace_back(key, value);
+        // Проверяем, не нужно ли разделить узел
+        if (new_node->entries.size() > BRANCHING_FACTOR / 2 &&
+            level < (sizeof(size_t) * 8 / BITS_PER_LEVEL)) {
 
-            // Проверяем, нужно ли разделить узел
-            if (new_node->entries.size() > BRANCHING_FACTOR / 2 &&
-                level < (sizeof(size_t) * 8 / BITS_PER_LEVEL)) {
-                // Разделяем узел
-                auto split_node = std::make_shared<Node>();
-                for (const auto& [k, v] : new_node->entries) {
-                    size_t entry_hash = hasher(k);
-                    size_t fragment = (entry_hash >> (level * BITS_PER_LEVEL)) & BIT_MASK;
-                    // Создание нового слота для хранения нового значения
-                    if (!(split_node->bitmap & (1 << fragment))) {
-                        split_node->bitmap |= (1 << fragment);
-                        size_t index = getIndex(split_node->bitmap, fragment);
-                        split_node->children.insert(
-                            split_node->children.begin() + index,
-                            std::make_shared<Node>()
-                        );
-                    }
+            // Разделяем узел
+            auto split_node = std::make_shared<Node>();
+
+            // Создаем копии записей перед их перемещением
+            auto entries_copy = new_node->entries;
+
+            for (const auto& entry : entries_copy) {
+                const K& k = entry.first;
+                const V& v = entry.second;
+                size_t entry_hash = hasher(k);
+                size_t fragment = (entry_hash >> (level * BITS_PER_LEVEL)) & BIT_MASK;
+                // Создание нового слота для хранения нового значения
+                if (!(split_node->bitmap & (1 << fragment))) {
+                    split_node->bitmap |= (1 << fragment);
+                    size_t index = getIndex(split_node->bitmap, fragment);
+
+                    auto leaf = std::make_shared<Node>();
+                    leaf->entries.emplace_back(k, v);
+
+                    split_node->children.insert(
+                        split_node->children.begin() + index,
+                        leaf
+                    );
+                }
+                else {
                     // Рекурсивно вставляем новое значение в соответствующий узел потомка
                     size_t index = getIndex(split_node->bitmap, fragment);
                     split_node->children[index] = insertNode(
@@ -232,8 +250,8 @@ PersistentMap<K, V>::insertNode(std::shared_ptr<Node> node,
                         entry_hash, k, v, level + 1
                     );
                 }
-                return split_node;
             }
+            return split_node;
         }
         return new_node;
     }
@@ -255,8 +273,14 @@ PersistentMap<K, V>::insertNode(std::shared_ptr<Node> node,
         );
     }
     else {
-        // Рекурсивно обновляем существующий дочерний узел
+        // Обновляем существующий узел потомка
         size_t index = getIndex(new_node->bitmap, hash_fragment);
+
+        // Проверяем границы
+        if (index >= new_node->children.size()) {
+            return new_node;
+        }
+        // Рекурсивно обновляем существующий узел потомка
         new_node->children[index] = insertNode(
             new_node->children[index],
             hash, key, value, level + 1
@@ -279,8 +303,9 @@ PersistentMap<K, V> PersistentMap<K, V>::erase(const K& key) const {
     PersistentMap<K, V> result;
 
     for (auto it = begin(); it != end(); ++it) {
-        if (it->first != key) {
-            result = result.set(it->first, it->second);
+        const auto& pair = *it;  
+        if (pair.first != key) {
+            result = result.set(pair.first, pair.second);
         }
     }
 
@@ -297,7 +322,6 @@ PersistentMap<K, V> PersistentMap<K, V>::erase(const K& key) const {
 // Конструктор итератора
 template<typename K, typename V>
 PersistentMap<K, V>::Iterator::Iterator(std::shared_ptr<Node> root) {
-    // Если у корня есть потомки - запускаем кастомный обход
     if (root && (!root->children.empty() || !root->entries.empty())) {
         stack.push_back({ root, 0, 0 });
         advance();
@@ -306,6 +330,7 @@ PersistentMap<K, V>::Iterator::Iterator(std::shared_ptr<Node> root) {
         has_value = false;
     }
 }
+
 // Метод для обхода итератором
 template<typename K, typename V>
 void PersistentMap<K, V>::Iterator::advance() {
@@ -320,12 +345,10 @@ void PersistentMap<K, V>::Iterator::advance() {
                 has_value = true;
                 return;
             }
-            // Иначе удаляем лист из стека
             stack.pop_back();
         }
+        // Внутренний узел
         else {
-            // Обработка внутреннего узла
-            // Если есть не обработанный потомок, то итерируем
             if (frame.child_index < frame.node->children.size()) {
                 auto child = frame.node->children[frame.child_index++];
                 if (child) {
@@ -333,7 +356,7 @@ void PersistentMap<K, V>::Iterator::advance() {
                 }
             }
             else {
-                // Иначе удаляем узел из стека
+                // Иначе удаляем лист из стека
                 stack.pop_back();
             }
         }
@@ -351,7 +374,6 @@ PersistentMap<K, V>::Iterator::operator++() {
     advance();
     return *this;
 }
-
 // Оператор неравенства
 template<typename K, typename V>
 bool PersistentMap<K, V>::Iterator::operator!=(const Iterator& other) const {
