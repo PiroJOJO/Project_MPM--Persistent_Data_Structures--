@@ -64,9 +64,6 @@ const T& PersistentVector<T>::operator[](size_t index) const {
 
 template<typename T>
 const T& PersistentVector<T>::get(size_t index) const {
-    if (index >= size()) {
-        throw std::out_of_range("Index out of range");
-    }
     return getNodeValue(index);
 }
 
