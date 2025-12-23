@@ -135,13 +135,9 @@ public:
                     temp.push_back(vec[i]);
                 }
                 catch (...) {
-                    try {
-                        temp.push_back(vec.get(i));
-                    }
-                    catch (...) {
                         std::cerr << "ERROR: Cannot access vector element" << std::endl;
                         throw;
-                    }
+                    
                 }
             }
         }
@@ -151,3 +147,4 @@ public:
 
 
 #endif 
+
