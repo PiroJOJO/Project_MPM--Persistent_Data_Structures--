@@ -32,8 +32,10 @@ public:
             auto temp = list.template toContainer<std::vector<T>>();
             return PersistentVector<T>(temp);
         }
-        catch (...) {}
-        return result;
+        catch (...) {
+            std::cerr << "ERROR: Cannot convert list to vector." << std::endl;
+            throw;
+        }
     }
 
     // -----------------------------------------
@@ -147,4 +149,5 @@ public:
 
 
 #endif 
+
 
